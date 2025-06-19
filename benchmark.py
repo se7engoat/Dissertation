@@ -57,4 +57,3 @@ def benchmark(mtx_path, n_runs=5):
 # Example usage
 if __name__ == "__main__":
     benchmark("/home/killerbean7/Documents/Dissertation/SparseMatrices/1138_bus.mtx")
-
