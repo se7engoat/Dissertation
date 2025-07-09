@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cusparse.h>
 #include "mmio.h"  // For .mtx file reading
+#include <nvml.h>  // For NVML GPU power/memory measurement
 
 #define CUDA_CHECK(err) \
     if (err != cudaSuccess) { \
@@ -86,6 +87,45 @@ void read_mtx_to_csr(const char* filename,
     *nnz = nz;
 }
 
+
+int power_measure() {
+    nvmlReturn_t result;
+    nvmlDevice_t device;
+    unsigned int power;
+    nvmlMemory_t memoryInfo;
+
+    result = nvmlInit();
+    if (NVML_SUCCESS != result) {
+        printf("nvmlInit failed: %s\n", nvmlErrorString(result));
+        return 1;
+    }
+
+    result = nvmlDeviceGetHandleByIndex(0, &device);
+    if (NVML_SUCCESS != result) {
+        printf("nvmlDeviceGetHandleByIndex failed: %s\n", nvmlErrorString(result));
+        nvmlShutdown();
+        return 1;
+    }
+
+    result = nvmlDeviceGetPowerUsage(device, &power);
+    if (NVML_SUCCESS != result) {
+        printf("nvmlDeviceGetPowerUsage failed: %s\n", nvmlErrorString(result));
+    } else {
+        printf("GPU Power Usage: %u milliwatts\n", power);
+    }
+
+    result = nvmlDeviceGetMemoryInfo(device, &memoryInfo);
+    if (NVML_SUCCESS != result) {
+        printf("nvmlDeviceGetMemoryInfo failed: %s\n", nvmlErrorString(result));
+    } else {
+        printf("Total GPU Memory: %llu bytes\n", (unsigned long long)memoryInfo.total);
+        printf("Used GPU Memory: %llu bytes\n", (unsigned long long)memoryInfo.used);
+    }
+
+    nvmlShutdown();
+    return (int) memoryInfo.used;
+}
+
 void benchmark_cusparse(const char* mtx_path, int n_runs) {
     // Read matrix
     int *row_ptr, *col_idx, *d_row_ptr, *d_col_idx;
@@ -153,14 +193,9 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
     CUDA_CHECK(cudaMalloc(&d_workspace, bufferSize));
 
     // Warm-up
-    CUSPARSE_CHECK(cusparseSpSV_analysis(
-        handle, opA, &alpha, matA, vecB, vecX,
-        CUDA_R_64F, alg, spsvDescr, d_workspace
-    ));
-    CUSPARSE_CHECK(cusparseSpSV_solve(
-        handle, opA, &alpha, matA, vecB, vecX,
-        CUDA_R_64F, alg, spsvDescr
-    ));
+    int mem1 = power_measure();
+    CUSPARSE_CHECK(cusparseSpSV_analysis(handle, opA, &alpha, matA, vecB, vecX,CUDA_R_64F, alg, spsvDescr, d_workspace));
+    CUSPARSE_CHECK(cusparseSpSV_solve(handle, opA, &alpha, matA, vecB, vecX,CUDA_R_64F, alg, spsvDescr));
 
     // Benchmark
     cudaEvent_t start, stop;
@@ -170,11 +205,15 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
 
     for (int i = 0; i < n_runs; i++) {
         CUDA_CHECK(cudaEventRecord(start, 0));
-        
         CUSPARSE_CHECK(cusparseSpSV_solve(
             handle, opA, &alpha, matA, vecB, vecX,
             CUDA_R_64F, alg, spsvDescr
         ));
+        //SpSV solve uses as triangular solve, so we assume the matrix is triangular
+        // If the matrix is not triangular, you would need to adjust the operation and fill mode
+        // accordingly.
+
+        //instead of SpSV solve, i need to use analysis and solve separately
         CUDA_CHECK(cudaEventRecord(stop, 0));
         CUDA_CHECK(cudaEventSynchronize(stop));
         
@@ -185,7 +224,8 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
     }
 
     printf("\nAverage solve time: %.2f ms\n", total_ms / n_runs);
-
+    int mem2 = power_measure();
+    printf("Memory used: %d bytes\n", mem2 - mem1);
     // Cleanup
     CUSPARSE_CHECK(cusparseDestroySpMat(matA));
     CUSPARSE_CHECK(cusparseDestroyDnVec(vecX));
@@ -204,10 +244,10 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        printf("Usage: %s <matrix.mtx> [runs=5]\n", argv[0]);
+        printf("Usage: %s <matrix.mtx> [runs=15]\n", argv[0]);
         return EXIT_FAILURE;
     }
-    int runs = (argc > 2) ? atoi(argv[2]) : 5;
+    int runs = (argc > 2) ? atoi(argv[2]) : 15;
     benchmark_cusparse(argv[1], runs);
     return EXIT_SUCCESS;
 }

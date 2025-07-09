@@ -3,6 +3,8 @@
 #include <cuda_runtime.h>
 #include <cudss.h>
 #include "mmio.h"  // For .mtx file reading
+#include <nvml.h>
+
 
 #define CUDA_CHECK(err) \
     if (err != cudaSuccess) { \
@@ -86,6 +88,45 @@ void read_mtx_to_csr(const char* filename,
     *nnz = nz;
 }
 
+
+int power_measure() {
+    nvmlReturn_t result;
+    nvmlDevice_t device;
+    unsigned int power;
+    nvmlMemory_t memoryInfo;
+
+    result = nvmlInit();
+    if (NVML_SUCCESS != result) {
+        printf("nvmlInit failed: %s\n", nvmlErrorString(result));
+        return 1;
+    }
+
+    result = nvmlDeviceGetHandleByIndex(0, &device);
+    if (NVML_SUCCESS != result) {
+        printf("nvmlDeviceGetHandleByIndex failed: %s\n", nvmlErrorString(result));
+        nvmlShutdown();
+        return 1;
+    }
+
+    result = nvmlDeviceGetPowerUsage(device, &power);
+    if (NVML_SUCCESS != result) {
+        printf("nvmlDeviceGetPowerUsage failed: %s\n", nvmlErrorString(result));
+    } else {
+        printf("GPU Power Usage: %u milliwatts\n", power);
+    }
+
+    result = nvmlDeviceGetMemoryInfo(device, &memoryInfo);
+    if (NVML_SUCCESS != result) {
+        printf("nvmlDeviceGetMemoryInfo failed: %s\n", nvmlErrorString(result));
+    } else {
+        printf("Total GPU Memory: %llu bytes\n", (unsigned long long)memoryInfo.total);
+        printf("Used GPU Memory: %llu bytes\n", (unsigned long long)memoryInfo.used);
+    }
+
+    nvmlShutdown();
+    return (int) memoryInfo.used;
+}
+
 void benchmark_cudss(const char* mtx_path, int n_runs) {
     // Read matrix
     int *row_ptr, *col_idx, *d_row_ptr, *d_col_idx;
@@ -135,6 +176,7 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
     CUDSS_CHECK(cudssMatrixCreateDn(&x_mat, n_rows, 1, n_rows, d_x, CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR));
 
     // Warm-up
+    int mem1 = power_measure();
     CUDSS_CHECK(cudssExecute(handle, CUDSS_PHASE_ANALYSIS, config, data, A, x_mat, b_mat));
     CUDSS_CHECK(cudssExecute(handle, CUDSS_PHASE_FACTORIZATION, config, data, A, x_mat, b_mat));
     CUDSS_CHECK(cudssExecute(handle, CUDSS_PHASE_SOLVE, config, data, A, x_mat, b_mat));
@@ -161,6 +203,8 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
     }
 
     printf("\nAverage solve time: %.2f ms\n", total_ms / n_runs);
+    int mem2 = power_measure();
+    printf("Memory usage: %d bytes\n", mem2 - mem1);
 
     // Cleanup
     CUDSS_CHECK(cudssMatrixDestroy(A));
@@ -180,10 +224,10 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        printf("Usage: %s <matrix.mtx> [runs=5]\n", argv[0]);
+        printf("Usage: %s <matrix.mtx> [runs=15]\n", argv[0]);
         return EXIT_FAILURE;
     }
-    int runs = (argc > 2) ? atoi(argv[2]) : 5;
+    int runs = (argc > 2) ? atoi(argv[2]) : 15;
     benchmark_cudss(argv[1], runs);
     return EXIT_SUCCESS;
 }
