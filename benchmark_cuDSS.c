@@ -88,7 +88,6 @@ void read_mtx_to_csr(const char* filename,
     *nnz = nz;
 }
 
-
 int power_measure() {
     nvmlReturn_t result;
     nvmlDevice_t device;
@@ -112,21 +111,20 @@ int power_measure() {
     if (NVML_SUCCESS != result) {
         printf("nvmlDeviceGetPowerUsage failed: %s\n", nvmlErrorString(result));
     } else {
-        printf("GPU Power Usage: %u milliwatts\n", power);
+        printf("GPU Power Usage: %u watts\n", power/1000);
     }
 
     result = nvmlDeviceGetMemoryInfo(device, &memoryInfo);
     if (NVML_SUCCESS != result) {
         printf("nvmlDeviceGetMemoryInfo failed: %s\n", nvmlErrorString(result));
     } else {
-        printf("Total GPU Memory: %llu bytes\n", (unsigned long long)memoryInfo.total);
-        printf("Used GPU Memory: %llu bytes\n", (unsigned long long)memoryInfo.used);
+        printf("Total GPU Memory: %llu megabytes\n", (unsigned long long)memoryInfo.total/1000000);
+        printf("Used GPU Memory: %llu megabytes\n", (unsigned long long)memoryInfo.used/1000000);
     }
 
     nvmlShutdown();
-    return (int) memoryInfo.used;
+    return (int) memoryInfo.used/1000000; // Return used memory in MB
 }
-
 void benchmark_cudss(const char* mtx_path, int n_runs) {
     // Read matrix
     int *row_ptr, *col_idx, *d_row_ptr, *d_col_idx;
@@ -136,11 +134,11 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
     read_mtx_to_csr(mtx_path, &row_ptr, &col_idx, &values, &n_rows, &n_cols, &nnz);
 
     // Allocate device memory
-    CUDA_CHECK(cudaMalloc(&d_row_ptr, (n_rows + 1) * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_col_idx, nnz * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_values, nnz * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&d_b, n_rows * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&d_x, n_rows * sizeof(double)));
+    CUDA_CHECK(cudaMalloc((void**)&d_row_ptr, (n_rows + 1) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void**)&d_col_idx, nnz * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void**)&d_values, nnz * sizeof(double)));
+    CUDA_CHECK(cudaMalloc((void**)&d_b, n_rows * sizeof(double)));
+    CUDA_CHECK(cudaMalloc((void**)&d_x, n_rows * sizeof(double)));
 
     // Copy data to device
     CUDA_CHECK(cudaMemcpy(d_row_ptr, row_ptr, (n_rows + 1) * sizeof(int), cudaMemcpyHostToDevice));
@@ -204,7 +202,7 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
 
     printf("\nAverage solve time: %.2f ms\n", total_ms / n_runs);
     int mem2 = power_measure();
-    printf("Memory usage: %d bytes\n", mem2 - mem1);
+    printf("Memory usage: %d Megabytes\n", mem2 - mem1);
 
     // Cleanup
     CUDSS_CHECK(cudssMatrixDestroy(A));
@@ -223,11 +221,12 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
 }
 
 int main(int argc, char** argv) {
+    int number_of_runs = 10; // Default number of runs
     if (argc < 2) {
-        printf("Usage: %s <matrix.mtx> [runs=15]\n", argv[0]);
+        printf("Usage: %s <matrix.mtx> [runs=%d]\n", argv[0], number_of_runs);
         return EXIT_FAILURE;
     }
-    int runs = (argc > 2) ? atoi(argv[2]) : 15;
+    int runs = (argc > 2) ? atoi(argv[2]) : number_of_runs;
     benchmark_cudss(argv[1], runs);
     return EXIT_SUCCESS;
 }
