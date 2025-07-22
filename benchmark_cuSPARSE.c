@@ -43,16 +43,24 @@ void read_mtx_to_csr(const char* filename,
     if ((ret_code = mm_read_mtx_crd_size(f, &M, &N, &nz)) != 0) {
         printf("Failed to read matrix size\n");
         exit(EXIT_FAILURE);
+    } else {
+        printf("Matrix size: %d x %d, Non-zeros: %d\n", M, N, nz);
     }
 
     // Temporary COO storage
     int* I = (int*)malloc(nz * sizeof(int));
+    printf("Allocated %.6f MB for row indices\n", 
+           (double)nz*sizeof(int)/(1024.0*1024.0));
     int* J = (int*)malloc(nz * sizeof(int));
+    printf("Allocated %.6f MB for column indices\n", 
+           (double)nz*sizeof(int)/(1024.0*1024.0));
     double* val = (double*)malloc(nz * sizeof(double));
+    printf("Allocated %.6f MB for values\n", 
+           (double)nz*sizeof(double)/(1024.0*1024.0));
     //adding this check to ensure memory allocation was successful
     if (!val) {
-        fprintf(stderr, "Failed to allocate %.1f MB for values\n", 
-           nz*sizeof(double)/(1024.0*1024.0));
+        fprintf(stderr, "Failed to allocate %.6f MB for values\n", 
+           (double)nz*sizeof(double)/(1024.0*1024.0));
         exit(EXIT_FAILURE);
     }
 
@@ -66,8 +74,14 @@ void read_mtx_to_csr(const char* filename,
 
     // Convert COO to CSR
     *row_ptr = (int*)calloc(M + 1, sizeof(int));
+    printf("Allocated %.6f MB for row pointers\n", 
+           (double)(M + 1) * sizeof(int) / (1024.0 * 1024.0));
     *col_idx = (int*)malloc(nz * sizeof(int));
+    printf("Allocated %.6f MB for column indices\n", 
+           (double)nz * sizeof(int) / (1024.0 * 1024.0));
     *values = (double*)malloc(nz * sizeof(double));
+    printf("Allocated %.6f MB for values\n", 
+           (double)nz * sizeof(double) / (1024.0 * 1024.0));
 
     // Count non-zeros per row
     for (int i = 0; i < nz; i++)
@@ -79,6 +93,8 @@ void read_mtx_to_csr(const char* filename,
 
     // Fill CSR
     int* row_count = (int*)calloc(M, sizeof(int));
+    printf("Allocated %.6f MB for row count\n", 
+           (double)M * sizeof(int) / (1024.0 * 1024.0));
     for (int i = 0; i < nz; i++) {
         int row = I[i];
         int dest = (*row_ptr)[row] + row_count[row];
@@ -87,7 +103,14 @@ void read_mtx_to_csr(const char* filename,
         row_count[row]++;
     }
 
-    free(I); free(J); free(val); free(row_count);
+    free(I); printf("Freed I of size %.6f MB\n", 
+           (double)nz * sizeof(int) / (1024.0 * 1024.0));
+    free(J); printf("Freed J of size %.6f MB\n", 
+           (double)nz * sizeof(int) / (1024.0 * 1024.0));
+    free(val); printf("Freed val of size %.6f MB\n", 
+           (double)nz * sizeof(double) / (1024.0 * 1024.0));
+    free(row_count); printf("Freed row_count of size %.6f MB\n", 
+           (double)M * sizeof(int) / (1024.0 * 1024.0));
     *n_rows = M;
     *n_cols = N;
     *nnz = nz;
@@ -142,21 +165,44 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
 
     // Allocate device memory
     CUDA_CHECK(cudaMalloc((void**)&d_row_ptr, (n_rows + 1) * sizeof(int)));
+    printf("Allocated %.6f MB for device row pointers - d_row_ptr\n", 
+           (double)(n_rows + 1) * sizeof(int) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaMalloc((void**)&d_col_idx, nnz * sizeof(int)));
+    printf("Allocated %.6f MB for device column indices - d_col_idx\n", 
+           (double)nnz * sizeof(int) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaMalloc((void**)&d_values, nnz * sizeof(double)));
+    printf("Allocated %.6f MB for device values - d_values\n", 
+           (double)nnz * sizeof(double) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaMalloc((void**)&d_b, n_rows * sizeof(double)));
+    printf("Allocated %.6f MB for device RHS vector - d_b\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaMalloc((void**)&d_x, n_rows * sizeof(double)));
+    printf("Allocated %.6f MB for device solution vector - d_x\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
 
     // Copy data to device
     CUDA_CHECK(cudaMemcpy(d_row_ptr, row_ptr, (n_rows + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    printf("Copying row pointers to device - d_row_ptr of size %.6f MB\n", 
+           (double)(n_rows + 1) * sizeof(int) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaMemcpy(d_col_idx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice));
+    printf("Copying column indices to device - d_col_idx of size %.6f MB\n", 
+           (double)nnz * sizeof(int) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaMemcpy(d_values, values, nnz * sizeof(double), cudaMemcpyHostToDevice));
+    printf("Copying values to device - d_values of size %.6f MB\n", 
+           (double)nnz * sizeof(double) / (1024.0 * 1024.0));
 
     // Generate random RHS
     double* b = (double*)malloc(n_rows * sizeof(double));
+    printf("Allocated %.6f MB for host RHS vector - b\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     for (int i = 0; i < n_rows; i++) 
         b[i] = (double)rand() / RAND_MAX;
     CUDA_CHECK(cudaMemcpy(d_b, b, n_rows * sizeof(double), cudaMemcpyHostToDevice));
+    printf("Copying RHS vector to device - d_b of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
+           
+    cudaSetDevice(0); // Ensure cuda context is created
+    cudaFree(0); // Safe no-op to ensure context is created
 
     // cuSPARSE setup
     cusparseHandle_t handle;
@@ -174,7 +220,11 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
     // Create vector descriptors
     cusparseDnVecDescr_t vecX, vecB;
     CUSPARSE_CHECK(cusparseCreateDnVec(&vecX, n_rows, d_x, CUDA_R_64F));
+    printf("Created device vector descriptor vecX of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     CUSPARSE_CHECK(cusparseCreateDnVec(&vecB, n_rows, d_b, CUDA_R_64F));
+    printf("Created device vector descriptor vecB of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
 
     // Solver setup (for triangular solve)
     cusparseSpSVDescr_t spsvDescr;
@@ -197,6 +247,8 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
     // Allocate workspace
     void* d_workspace;
     CUDA_CHECK(cudaMalloc(&d_workspace, bufferSize));
+    printf("Allocated %.6f MB for device workspace - d_workspace\n", 
+           (double)bufferSize / (1024.0 * 1024.0));
 
     // Warm-up
     int mem1 = power_measure();
@@ -234,18 +286,50 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
     printf("Memory used: %d megabytes\n", mem2 - mem1);
     // Cleanup
     CUSPARSE_CHECK(cusparseDestroySpMat(matA));
+    printf("Destroyed sparse matrix descriptor matA of size %.6f MB\n", 
+           (double)(n_rows + 1) * sizeof(int) / (1024.0 * 1024.0));
     CUSPARSE_CHECK(cusparseDestroyDnVec(vecX));
+    printf("Destroyed device vector descriptor vecX of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     CUSPARSE_CHECK(cusparseDestroyDnVec(vecB));
+    printf("Destroyed device vector descriptor vecB of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     CUSPARSE_CHECK(cusparseSpSV_destroyDescr(spsvDescr));
+    printf("Destroyed sparse solver descriptor spsvDescr of size %.6f MB\n", 
+           (double)(n_rows + 1) * sizeof(int) / (1024.0 * 1024.0));
     CUSPARSE_CHECK(cusparseDestroy(handle));
+    printf("Destroyed cuSPARSE handle\n");
 
-    free(row_ptr); free(col_idx); free(values); free(b);
+    free(row_ptr); 
+    printf("Freed row_ptr of size %.6f MB\n", 
+           (double)(n_rows + 1) * sizeof(int) / (1024.0 * 1024.0));
+    free(col_idx);
+    printf("Freed col_idx of size %.6f MB\n", 
+           (double)nnz * sizeof(int) / (1024.0 * 1024.0)); 
+    free(values); 
+    printf("Freed values of size %.6f MB\n", 
+           (double)nnz * sizeof(double) / (1024.0 * 1024.0));
+    free(b);
+    printf("Freed host RHS vector b of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaFree(d_row_ptr));
+    printf("Freed device row pointers d_row_ptr of size %.6f MB\n", 
+           (double)(n_rows + 1) * sizeof(int) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaFree(d_col_idx));
+    printf("Freed device column indices d_col_idx of size %.6f MB\n", 
+           (double)nnz * sizeof(int) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaFree(d_values));
+    printf("Freed device values d_values of size %.6f MB\n", 
+           (double)nnz * sizeof(double) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaFree(d_b));
+    printf("Freed device RHS vector d_b of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaFree(d_x));
+    printf("Freed device solution vector d_x of size %.6f MB\n", 
+           (double)n_rows * sizeof(double) / (1024.0 * 1024.0));
     CUDA_CHECK(cudaFree(d_workspace));
+    printf("Freed device workspace d_workspace of size %.6f MB\n", 
+           (double)bufferSize / (1024.0 * 1024.0));
 }
 
 int main(int argc, char** argv) {
