@@ -189,6 +189,17 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
     int hybrid_mode = 1;
     cudssConfigSet(handle, CUDSS_CONFIG_HYBRID_MODE, &hybrid_mode, sizeof(int));
 
+
+    int reordering_alg = CUDSS_ALG_3; //1,2,3 configs
+    cudssConfigSet(handle, CUDSS_CONFIG_REORDERING_ALG, &reordering_alg, sizeof(int));  
+
+    int factorization_alg = CUDSS_ALG_1; //default and 1, which is a mod of default
+    cudssConfigSet(handle, CUDSS_CONFIG_FACTORIZATION_ALG, &factorization_alg, sizeof(int));
+
+    int solve_alg = CUDSS_ALG_4; //has only default
+   cudssConfigSet(handle, CUDSS_CONFIG_SOLVE_ALG, &solve_alg, sizeof(int));
+   cudssConfigSet(handle, CUDSS_CONFIG_HYBRID_EXECUTE_MODE, &hybrid_mode, sizeof(int));
+
     // --- Matrix Descriptor ---
     cudssMatrix_t A;
     CUDSS_CHECK(cudssMatrixCreateCsr(
@@ -230,32 +241,61 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
 
     // --- Benchmark ---
     printf("\n[PHASE] Benchmarking solve phase (%d runs)...\n", n_runs);
-    float total_solve = 0, min_solve = 1e9, max_solve = 0;
+    float total_solve = 0, total_analysis = 0, total_factorization = 0;
+    float min_solve = 1e9, max_solve = 0;
+    float min_factorization = 1e9, max_factorization = 0;
+    float min_analysis = 1e9, max_analysis = 0;
     get_gpu_stats(&stats); // Initial GPU stats
 
     for (int i = 0; i < n_runs; i++) {
+
+        CUDA_CHECK(cudaEventRecord(start, 0));
+        CUDSS_CHECK(cudssExecute(handle, CUDSS_PHASE_ANALYSIS, config, data, A, x_mat, b_mat));
+        CUDA_CHECK(cudaEventRecord(stop, 0));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+        CUDA_CHECK(cudaEventElapsedTime(&analysis_ms, start, stop));
+
+        CUDA_CHECK(cudaEventRecord(start, 0));
+        CUDSS_CHECK(cudssExecute(handle, CUDSS_PHASE_FACTORIZATION, config, data, A, x_mat, b_mat));
+        CUDA_CHECK(cudaEventRecord(stop, 0));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+        CUDA_CHECK(cudaEventElapsedTime(&factorization_ms, start, stop));
+
         CUDA_CHECK(cudaEventRecord(start, 0));
         CUDSS_CHECK(cudssExecute(handle, CUDSS_PHASE_SOLVE, config, data, A, x_mat, b_mat));
         CUDA_CHECK(cudaEventRecord(stop, 0));
         CUDA_CHECK(cudaEventSynchronize(stop));
         CUDA_CHECK(cudaEventElapsedTime(&solve_ms, start, stop));
 
+
         total_solve += solve_ms;
-        if (solve_ms < min_solve) min_solve = solve_ms;
-        if (solve_ms > max_solve) max_solve = solve_ms;
-        printf("[RUN %02d] Solve time: %.2f ms\n", i + 1, solve_ms);
+        total_analysis += analysis_ms;
+        total_factorization += factorization_ms;
+        
+        if(analysis_ms < min_analysis) min_analysis = analysis_ms;
+        if(analysis_ms > max_analysis) max_analysis = analysis_ms;
+        if(factorization_ms < min_factorization) min_factorization = factorization_ms;
+        if(factorization_ms > max_factorization) max_factorization = factorization_ms;
+        if(solve_ms < min_solve) min_solve = solve_ms;
+        if(solve_ms > max_solve) max_solve = solve_ms;
+        printf("[RUN %02d] Analysis time: %.2f ms | Factorization time: %.2f ms | Solve time: %.2f ms\n", i + 1, analysis_ms, factorization_ms, solve_ms);
     }
 
     // --- Results ---
     printf("\n============= Results =============\n");
     printf("[TIMING] Solve (avg/min/max): %.2f / %.2f / %.2f ms\n",
-           total_solve / n_runs, min_solve, max_solve);
+            total_solve / n_runs, min_solve, max_solve);
+    printf("[TIMING] Analysis (avg/min/max): %.2f / %.2f / %.2f ms\n",
+            total_analysis / n_runs, min_analysis, max_analysis);
+    printf("[TIMING] Factorization (avg/min/max): %.2f / %.2f / %.2f ms\n",
+            total_factorization / n_runs, min_factorization, max_factorization);
+
     printf("[TIMING] Total (analysis + factorization + solve): %.2f ms\n",
-           analysis_ms + factorization_ms + total_solve / n_runs);
+            (total_analysis + total_factorization + total_solve) / n_runs); 
     get_gpu_stats(&stats);
     printf("[MEMORY] Host: %.2f MB | Device: %.2f MB\n",
-           stats.host_memory / (1024.0 * 1024.0),
-           stats.device_memory / (1024.0 * 1024.0));
+            stats.host_memory / (1024.0 * 1024.0),
+            stats.device_memory / (1024.0 * 1024.0));
 
     // --- Cleanup ---
     printf("\n[PHASE] Cleaning up...\n");
@@ -277,11 +317,13 @@ void benchmark_cudss(const char* mtx_path, int n_runs) {
 }
 
 int main(int argc, char** argv) {
+
+    int num_of_runs = 25;
     if (argc < 2) {
         printf("Usage: %s <matrix.mtx> [runs=10]\n", argv[0]);
         return EXIT_FAILURE;
     }
-    int runs = (argc > 2) ? atoi(argv[2]) : 10;
+    int runs = (argc > 2) ? atoi(argv[2]) : num_of_runs;
     benchmark_cudss(argv[1], runs);
     return EXIT_SUCCESS;
 }

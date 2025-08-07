@@ -214,7 +214,7 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
 
     // --- Warmup ---
     printf("\n[PHASE] Warmup...\n");
-    float analysis_ms, solve_ms;
+    float analysis_ms, factorization_ms, solve_ms;
 
     CUDA_CHECK(cudaEventRecord(start, 0));
     CUSPARSE_CHECK(cusparseSpSV_analysis(
@@ -224,6 +224,60 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
     CUDA_CHECK(cudaEventRecord(stop, 0));
     CUDA_CHECK(cudaEventSynchronize(stop));
     CUDA_CHECK(cudaEventElapsedTime(&analysis_ms, start, stop));
+
+
+    // // --- Incomplete LU(0) Factorization using csrilu02 ---
+    // CUDA_CHECK(cudaEventRecord(start, 0));
+    // cusparseMatDescr_t matA_descr;
+    // CUSPARSE_CHECK(cusparseCreateMatDescr(&matA_descr));
+    // CUSPARSE_CHECK(cusparseSetMatType(matA_descr, CUSPARSE_MATRIX_TYPE_GENERAL));
+    // CUSPARSE_CHECK(cusparseSetMatIndexBase(matA_descr, CUSPARSE_INDEX_BASE_ZERO));
+
+    // csrilu02Info_t info_M = NULL;
+    // CUSPARSE_CHECK(cusparseCreateCsrilu02Info(&info_M));
+
+    // int structural_zero;
+    // size_t bufferSize_M;
+    // void* pBuffer_M = NULL;
+
+    // // Query buffer size for csrilu02
+    // CUSPARSE_CHECK(cusparseDcsrilu02_bufferSize(
+    //     handle, n_rows, nnz,
+    //     matA_descr,
+    //     d_values, d_row_ptr, d_col_idx,
+    //     info_M, &bufferSize_M
+    // ));
+
+    // CUDA_CHECK(cudaMalloc(&pBuffer_M, bufferSize_M));
+
+    // // Analysis phase for csrilu02
+    // CUSPARSE_CHECK(cusparseDcsrilu02_analysis(
+    //     handle, n_rows, nnz,
+    //     matA_descr,
+    //     d_values, d_row_ptr, d_col_idx,
+    //     info_M,
+    //     CUSPARSE_SOLVE_POLICY_NO_LEVEL, pBuffer_M
+    // ));
+
+    // // Perform the actual ILU(0) factorization
+    // CUSPARSE_CHECK(cusparseDcsrilu02(
+    //     handle, n_rows, nnz,
+    //     matA_descr,
+    //     d_values, d_row_ptr, d_col_idx,
+    //     info_M,
+    //     CUSPARSE_SOLVE_POLICY_NO_LEVEL, pBuffer_M
+    // ));
+
+    // // Check for structural zero pivot
+    // CUSPARSE_CHECK(cusparseXcsrilu02_zeroPivot(handle, info_M, &structural_zero));
+    // if (structural_zero != -1) {
+    //     printf("[csrilu02 WARNING] Structural zero at row %d\\n", structural_zero);
+    // }
+
+    // CUDA_CHECK(cudaEventRecord(stop, 0));
+    // CUDA_CHECK(cudaEventSynchronize(stop));
+    // CUDA_CHECK(cudaEventElapsedTime(&factorization_ms, start, stop));
+
 
     CUDA_CHECK(cudaEventRecord(start, 0));
     CUSPARSE_CHECK(cusparseSpSV_solve(
@@ -239,9 +293,21 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
     // --- Benchmark ---
     printf("\n[PHASE] Benchmarking solve phase (%d runs)...\n", n_runs);
     float total_solve = 0, min_solve = 1e9, max_solve = 0;
+    float total_analysis = 0, min_analysis = 1e9, max_analysis = 0;
+    float total_factorization = 0, min_factorization = 1e9, max_factorization = 0;
+    float total_run_avg = 0;
     get_gpu_stats(&stats);
 
     for (int i = 0; i < n_runs; i++) {
+        CUDA_CHECK(cudaEventRecord(start, 0));
+        CUSPARSE_CHECK(cusparseSpSV_analysis(
+            handle, opA, &alpha, matA, vecB, vecX,
+            CUDA_R_64F, alg, spsvDescr, d_workspace
+        ));
+        CUDA_CHECK(cudaEventRecord(stop, 0));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+        CUDA_CHECK(cudaEventElapsedTime(&solve_ms, start, stop));
+
         CUDA_CHECK(cudaEventRecord(start, 0));
         CUSPARSE_CHECK(cusparseSpSV_solve(
             handle, opA, &alpha, matA, vecB, vecX,
@@ -252,9 +318,17 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
         CUDA_CHECK(cudaEventElapsedTime(&solve_ms, start, stop));
 
         total_solve += solve_ms;
-        if (solve_ms < min_solve) min_solve = solve_ms;
-        if (solve_ms > max_solve) max_solve = solve_ms;
-        printf("[RUN %02d] Solve time: %.2f ms\n", i + 1, solve_ms);
+        total_analysis += analysis_ms;
+        total_factorization += factorization_ms;
+        total_run_avg = total_solve + solve_ms + factorization_ms + analysis_ms;
+        
+        if(analysis_ms < min_analysis) min_analysis = analysis_ms;
+        if(analysis_ms > max_analysis) max_analysis = analysis_ms;
+        if(factorization_ms < min_factorization) min_factorization = factorization_ms;
+        if(factorization_ms > max_factorization) max_factorization = factorization_ms;
+        if(solve_ms < min_solve) min_solve = solve_ms;
+        if(solve_ms > max_solve) max_solve = solve_ms;
+        printf("[RUN %02d] Analysis time: %.2f ms | Factorization time: %.2f ms | Solve time: %.2f ms\n", i + 1, analysis_ms, factorization_ms, solve_ms);
     }
 
     // --- Results ---
@@ -288,11 +362,12 @@ void benchmark_cusparse(const char* mtx_path, int n_runs) {
 }
 
 int main(int argc, char** argv) {
+    int num_of_runs = 20;
     if (argc < 2) {
         printf("Usage: %s <matrix.mtx> [runs=10]\n", argv[0]);
         return EXIT_FAILURE;
     }
-    int runs = (argc > 2) ? atoi(argv[2]) : 10;
+    int runs = (argc > 2) ? atoi(argv[2]) : num_of_runs;
     benchmark_cusparse(argv[1], runs);
     return EXIT_SUCCESS;
 }
